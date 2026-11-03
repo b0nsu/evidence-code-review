@@ -22,7 +22,7 @@ Select by relevance, not quota: authorized/unauthorized principal; same-tenant/c
 
 Forms that look like protection but pass for a plausible defect. The principle is what matters; these are examples, in Jest terms, and the same shapes exist in other frameworks.
 
-- Negated conjunction: `not.arrayContaining([a, b])`, `not.objectContaining({a, b})`, `not.toMatchObject({...})` fail only when every listed item matches, so one leaked item passes. Assert each forbidden item on its own.
+- Negated conjunction: a negated matcher whose argument lists several items (array or object containment, partial object match) fails only when every listed item matches, so one leaked item passes. Assert each forbidden item on its own.
 - Presence without content: `toHaveBeenCalled()`, `toBeDefined()`, `toBeTruthy()`, `expect.anything()`, `expect.any(T)` where the value is what the test name promises.
 - Partial matchers (`toMatchObject`, `objectContaining`, substring `toContain`) ignore fields they do not name, so they cannot catch a leaked extra field.
 - Async: a promise assertion that is not returned or awaited, assertions in `.then`/`.catch` without `expect.assertions(n)`, an unused `done`. If the branch never runs the test passes.
