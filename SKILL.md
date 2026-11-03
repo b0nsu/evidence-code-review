@@ -1,7 +1,7 @@
 ---
 name: evidence-code-review
 metadata:
-  version: "0.3.2"
+  version: "0.3.3"
 description: >
   Evidence-based code and test review for a PR, commit, diff, or explicit code area.
   Assess direction (contract fit), execution (runtime correctness), and verification
@@ -48,7 +48,7 @@ Consider all three lenses where evidence permits; do not force an invented concl
 - Establish scope from explicit base/target; otherwise inspect staged/unstaged changes and relevant untracked files. Avoid guessing target branch or full-repo scope. If requested scope cannot be resolved, return `incomplete`, not `no_actionable_findings`.
 - Trace code behavior through entry points, guards, state transitions, callers, persistence and error handling. Inspect relevant tests and their expectations as objects of review.
 - Check the change against what actually reaches it, not only its own types and comments. If it adds or rewires a central consumer (global error handler, middleware, interceptor, subscriber, classifier, telemetry sink), grep the existing producers that now feed it and test each input shape against the consumer's assumptions. Docstrings or tests listing "the inputs/paths we handle" are author claims, not the inventory.
-- If the change instruments, reports, or guards one outcome of a mechanism (a failure handler, a diagnostic event, a reset, a retry cap), enumerate that mechanism's outcomes from its own code, not from the change: success, each failure kind, timeout, cancellation or abort, and the catch-all or unknown branch. For each outcome give `path:line` and say whether the change handles it, deliberately leaves it out (cite where that intent is stated), or leaves it unaddressed. An unaddressed outcome that reaches the same end state is at least an assurance gap. Do this before reading the change's tests, which show only the outcomes the author thought of.
+- If the change instruments, reports, or guards one outcome of a mechanism (a failure handler, a diagnostic event, a reset, a retry cap), enumerate that mechanism's outcomes from its own code, not from the change: success, each failure kind, timeout, cancellation or abort, and the catch-all or unknown branch. For each outcome give `path:line` and say whether the change handles it, deliberately leaves it out (cite where that intent is stated), or leaves it unaddressed. Record an unaddressed outcome that reaches the same end state as an assurance gap when a grounded contract requires it to be handled, and as a contract unknown when that is unspecified. Do this before reading the change's tests, which show only the outcomes the author thought of.
 - For each candidate issue, ask whether a permitted counterexample would make the current check pass; inspect opposing evidence (upstream authorization, fallback, already-enforced invariant, legacy contract). Discard disconfirmed candidates.
 - For changed tests, try to break each assertion that guards a forbidden or failure outcome (negated matchers, absence or "not called" checks, error and rejection paths, "only X is sent" claims). Name the smallest defect the test says it catches (one forbidden item present, a wrong argument, a promise that resolves instead of rejecting) and decide from the matcher's semantics whether that defect would make it fail. Reading a test for intent does not count as this check. `references/test-quality.md` (Matcher traps) lists common forms that pass anyway.
 - Report test defects when the oracle contradicts a grounded contract or the test is demonstrably unable to detect a stated intended regression. A missing test by itself normally belongs in `assurance_gaps`, not prioritized code findings; distinguish absent tests from untested but proven implementation bugs.
@@ -63,7 +63,7 @@ Use this when the input includes findings from another reviewer or tool (pasted 
 - For each candidate: check its factual premise in the code (`path:line`), its reachability from the changed entry point, and any author-stated intent (tests, docstrings, commit message) or counterevidence. Then give one verdict:
   - `confirmed`: premise true, reachable, and contradicts a grounded contract or invariant. Report it as a finding under the usual rules.
   - `plausible`: premise true and reachable, but the contract is unclear or the trigger is unproven. Record it as an assurance gap or contract unknown.
-  - `rejected`: premise false, path unreachable, or behavior documented as intended. Name the deciding evidence.
+  - `rejected`: premise false, path unreachable, or behavior permitted by an independently grounded contract or invariant. Name the deciding evidence. A test, comment or commit message saying the behavior is intended shows what the author meant, not that it is right; when that is the only support, use `plausible` and state what the intended behavior gives up.
 - When the candidate's scenario is wrong but its conclusion holds through another path, say so and give the correct path. Merge candidates that share a root cause.
 - After the candidates, make one bounded pass of your own (the producer and sibling-outcome check above, plus the assertion-breaking check on changed tests) and report anything new separately as verifier additions.
 - Run in a context that did not write the change or the candidates (a fresh subagent when available); a reviewer anchored on the candidate list or the implementation tends to confirm it.
@@ -74,6 +74,6 @@ Use this when the input includes findings from another reviewer or tool (pasted 
 - Findings (if any), ordered by severity and confidence, each tagged `direction`, `execution`, or `verification`; avoid duplicate findings with the same root cause. Severity describes impact, not whether a test is absent.
 - Assurance gaps / contract unknowns (if material): specify which requirement is unclear or which failure mode no test currently distinguishes, but do not disguise hypotheses as confirmed defects.
 - Three-lens assessment: short evidence-backed `supported` / `risk` / `unknown` statements for direction, execution and verification. `supported` means *the inspected evidence supports the narrow claim*, not globally correct.
-- Scope, performed checks, and limitations: exact base, files, command outcomes, and the outcome list from the sibling-outcome check; distinguish executed vs static analysis vs not run. If no evidence-based findings: `확인 가능한 결함을 발견하지 못했습니다` and explicitly state that safety is not thereby proven.
+- Scope, performed checks, and limitations: exact base, files, command outcomes, and the outcome list when the sibling-outcome check applied; distinguish executed vs static analysis vs not run. If no evidence-based findings: `확인 가능한 결함을 발견하지 못했습니다` and explicitly state that safety is not thereby proven.
 - For machine-readable handoffs use `references/finding-contract.md` schema `1.1`; `scripts/validate_review.py` validates structure and some internal consistency only, not truth.
 

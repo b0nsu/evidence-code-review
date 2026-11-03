@@ -20,6 +20,10 @@ VERIFICATION_STATUSES = {"executed", "static_trace"}
 CONCLUSION_STATUSES = {"issues_found", "no_actionable_findings", "incomplete"}
 
 
+def valid_enum(value, allowed):
+    return isinstance(value, str) and value in allowed
+
+
 def nonempty(value):
     return isinstance(value, str) and bool(value.strip())
 
@@ -67,7 +71,7 @@ def validate(review):
         if (c := obj(check, f"checks[{i}]", problems)) is None:
             continue
         require_strings(c, ("command", "result"), f"checks[{i}]", problems)
-        if c.get("status") not in CHECK_STATUSES:
+        if not valid_enum(c.get("status"), CHECK_STATUSES):
             problems.append(f"checks[{i}].status invalid")
 
     qa = obj(review.get("quality_assessment"), "quality_assessment", problems)
@@ -75,7 +79,7 @@ def validate(review):
         for axis in sorted(AXES):
             if (a := obj(qa.get(axis), f"quality_assessment.{axis}", problems)) is None:
                 continue
-            if a.get("status") not in ASSESSMENTS:
+            if not valid_enum(a.get("status"), ASSESSMENTS):
                 problems.append(f"quality_assessment.{axis}.status invalid")
             require_strings(a, ("support",), f"quality_assessment.{axis}", problems)
 
@@ -91,13 +95,13 @@ def validate(review):
             if fid in seen_ids:
                 problems.append(f"{prefix}.id duplicated: {fid}")
             seen_ids.add(fid)
-        if f.get("kind") not in KINDS:
+        if not valid_enum(f.get("kind"), KINDS):
             problems.append(f"{prefix}.kind invalid")
-        if f.get("axis") not in AXES:
+        if not valid_enum(f.get("axis"), AXES):
             problems.append(f"{prefix}.axis invalid")
-        if f.get("severity") not in SEVERITIES:
+        if not valid_enum(f.get("severity"), SEVERITIES):
             problems.append(f"{prefix}.severity invalid")
-        if f.get("confidence") not in CONFIDENCES:
+        if not valid_enum(f.get("confidence"), CONFIDENCES):
             problems.append(f"{prefix}.confidence invalid")
         if f.get("kind") == "test_defect" and not nonempty(f.get("test_counterexample")):
             problems.append(f"{prefix}.test_counterexample required for test_defect")
@@ -109,7 +113,7 @@ def validate(review):
         if (contract := obj(f.get("contract"), f"{prefix}.contract", problems)) is not None:
             require_strings(contract, ("source", "expectation"), f"{prefix}.contract", problems)
         if (v := obj(f.get("verification"), f"{prefix}.verification", problems)) is not None:
-            if v.get("status") not in VERIFICATION_STATUSES:
+            if not valid_enum(v.get("status"), VERIFICATION_STATUSES):
                 problems.append(f"{prefix}.verification.status invalid")
             require_strings(v, ("detail",), f"{prefix}.verification", problems)
 
@@ -123,7 +127,7 @@ def validate(review):
     conclusion = obj(review.get("conclusion"), "conclusion", problems)
     if conclusion is not None:
         status = conclusion.get("status")
-        if status not in CONCLUSION_STATUSES:
+        if not valid_enum(status, CONCLUSION_STATUSES):
             problems.append("conclusion.status invalid")
         require_strings(conclusion, ("summary",), "conclusion", problems)
         if status == "issues_found" and not findings:
