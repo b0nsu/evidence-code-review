@@ -34,4 +34,4 @@ Requirement: retrying a payment request with the same idempotency key charges at
 - `test_retry_charges_again` expects two charges. If added in the diff, its **oracle is wrong** relative to the requirement, even if it passes.
 - If the new handler actually charges twice, that is **a code defect**; report separately from test weakness only when fixes/action owners differ and avoid double-counting one root cause.
 
-A negative test is useful only if it asserts the correct outcome derived from a credible source; `expect(chargeMock).toHaveBeenCalled()` does not show the second call was suppressed.
+A negative test is useful only if it asserts the correct outcome derived from a credible source; `expect(chargeMock).toHaveBeenCalled()` does not show the second call was suppressed, and `assert response.status_code != 500` is not a denial assertion either.
