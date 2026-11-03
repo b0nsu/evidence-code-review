@@ -25,13 +25,13 @@ Direction and execution concern **product correctness**. Verification concerns t
 - **Assurance gap:** test doesn't cover a credible, important negative path but implementation has not been shown faulty. Suggest a discriminating test without claiming a bug.
 - **Contract unknown:** competing or missing sources prevent judging expected behavior. State exactly which decision cannot be grounded.
 
-## Mini-review example (illustrative, NOT an actual PR)
+## Mini-review example (illustrative, not an actual PR)
 
-Requirement: A user may retrieve only their own order.
+Requirement: retrying a payment request with the same idempotency key charges at most once.
 
-- `test_owner_can_read` expects 200. It can pass on both secure and insecure implementations; it is **not** a security proof.
-- `test_other_user_is_denied` expects 403/404 (depending on the API's explicit policy). It probes forbidden access.
-- `test_other_user_can_read` expects 200. If added in the diff, its **oracle is wrong** relative to the requirement, even if it passes.
-- If the new handler actually returns the other user's order, that is **a code defect**; report separately from test weakness only when fixes/action owners differ and avoid double-counting one root cause.
+- `test_first_charge_succeeds` expects one charge. It passes whether or not retries are deduplicated; it is **not** an idempotency proof.
+- `test_retry_with_same_key_charges_once` sends the request twice and asserts exactly one charge row. It probes the forbidden outcome.
+- `test_retry_charges_again` expects two charges. If added in the diff, its **oracle is wrong** relative to the requirement, even if it passes.
+- If the new handler actually charges twice, that is **a code defect**; report separately from test weakness only when fixes/action owners differ and avoid double-counting one root cause.
 
-A negative test is useful only if it asserts the correct outcome derived from a credible source; `assert response.status_code != 500` is not sufficient proof of authorization.
+A negative test is useful only if it asserts the correct outcome derived from a credible source; `expect(chargeMock).toHaveBeenCalled()` does not show the second call was suppressed.

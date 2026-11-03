@@ -79,6 +79,4 @@ A `test_defect` additionally requires `test_counterexample` (nonempty string exp
 
 Each `assurance_gaps` entry requires nonempty `area`, `risk`, `discriminating_check`, `evidence`. Each `contract_unknowns` entry requires nonempty `question` (the expectation that cannot be grounded), `blocked_decision` (the conclusion it prevents), and `evidence` (the sources inspected and how they conflict or are missing).
 
-### Older JSON
-
-`schema_version=1.0` belongs to the v0.1 contract; it is not silently accepted by the v1.1 validator. Consumers should migrate explicitly. This prevents downstream tools from interpreting absent test-quality fields as positive evidence.
+Emit `schema_version` `"1.1"` only; the validator rejects any other version so that a document without the test-quality fields is never read as positive evidence.

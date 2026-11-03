@@ -1,7 +1,7 @@
 ---
 name: evidence-code-review
 metadata:
-  version: "0.3.3"
+  version: "0.3.4"
 description: >
   Evidence-based code and test review for a PR, commit, diff, or explicit code area.
   Assess direction (contract fit), execution (runtime correctness), and verification
