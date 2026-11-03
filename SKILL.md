@@ -1,7 +1,7 @@
 ---
 name: evidence-code-review
 metadata:
-  version: "0.3.0"
+  version: "0.3.1"
 description: >
   Evidence-based code and test review for a PR, commit, diff, or explicit code area.
   Assess direction (contract fit), execution (runtime correctness), and verification
@@ -49,7 +49,8 @@ Consider all three lenses where evidence permits; do not force an invented concl
 - Trace code behavior through entry points, guards, state transitions, callers, persistence and error handling. Inspect relevant tests and their expectations as objects of review.
 - Check the change against what actually reaches it, not only its own types and comments. If it adds or rewires a central consumer (global error handler, middleware, interceptor, subscriber, classifier, telemetry sink), grep the existing producers that now feed it and test each input shape against the consumer's assumptions. If it instruments or guards one outcome of a multi-outcome mechanism, list the sibling outcomes that reach the same end state and check they are handled. Docstrings or tests listing "the inputs/paths we handle" are author claims, not the inventory.
 - For each candidate issue, ask whether a permitted counterexample would make the current check pass; inspect opposing evidence (upstream authorization, fallback, already-enforced invariant, legacy contract). Discard disconfirmed candidates.
-- For changed tests, report test defects when the oracle contradicts a grounded contract or the test is demonstrably unable to detect a stated intended regression. A missing test by itself normally belongs in `assurance_gaps`, not prioritized code findings; distinguish absent tests from untested but proven implementation bugs.
+- For changed tests, try to break each assertion that guards a forbidden or failure outcome (negated matchers, absence or "not called" checks, error and rejection paths, "only X is sent" claims). Name the smallest defect the test says it catches (one forbidden item present, a wrong argument, a promise that resolves instead of rejecting) and decide from the matcher's semantics whether that defect would make it fail. Reading a test for intent does not count as this check. `references/test-quality.md` (Matcher traps) lists common forms that pass anyway.
+- Report test defects when the oracle contradicts a grounded contract or the test is demonstrably unable to detect a stated intended regression. A missing test by itself normally belongs in `assurance_gaps`, not prioritized code findings; distinguish absent tests from untested but proven implementation bugs.
 - Tie each actionable finding to a changed line where feasible. If the defect is in an unchanged line newly exposed by the change, cite the unchanged defect location and the changed entry point or call path that exposes it (in the observation or trigger). Include a concrete trigger, causal path, impact, independent contract evidence (or explicitly justified invariant), counterevidence considered, and verification status. Do not treat a hypothetical attack or unspecified behavior as a proven bug.
 - Escalate risk-based effort for authorization, billing, data integrity, migration, cross-tenant access, races, external side effects, and hard-to-reverse behavior, not merely long diffs. Stop expanding when material candidates have been checked and additional context is low value.
 
@@ -63,7 +64,7 @@ Use this when the input includes findings from another reviewer or tool (pasted 
   - `plausible`: premise true and reachable, but the contract is unclear or the trigger is unproven. Record it as an assurance gap or contract unknown.
   - `rejected`: premise false, path unreachable, or behavior documented as intended. Name the deciding evidence.
 - When the candidate's scenario is wrong but its conclusion holds through another path, say so and give the correct path. Merge candidates that share a root cause.
-- After the candidates, make one bounded pass of your own (the producer and sibling-outcome check above, plus changed tests' oracles) and report anything new separately as verifier additions.
+- After the candidates, make one bounded pass of your own (the producer and sibling-outcome check above, plus the assertion-breaking check on changed tests) and report anything new separately as verifier additions.
 - Run in a context that did not write the change or the candidates (a fresh subagent when available); a reviewer anchored on the candidate list or the implementation tends to confirm it.
 - Output a verdict table (candidate → verdict → deciding evidence) before the usual final response.
 

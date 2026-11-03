@@ -18,6 +18,19 @@ Distinguish:
 
 Select by relevance, not quota: authorized/unauthorized principal; same-tenant/cross-tenant; missing/null/empty; duplicate/idempotent; insufficient balance and partial rollback; concurrency interleaving; old/new consumer; invalid input; error and retry; cache invalidate/refresh. For each, state intended outcome, source, and observable failure, not merely an input list.
 
+## Matcher traps
+
+Forms that look like protection but pass for a plausible defect. The principle is what matters; these are examples, in Jest terms, and the same shapes exist in other frameworks.
+
+- Negated conjunction: `not.arrayContaining([a, b])`, `not.objectContaining({a, b})`, `not.toMatchObject({...})` fail only when every listed item matches, so one leaked item passes. Assert each forbidden item on its own.
+- Presence without content: `toHaveBeenCalled()`, `toBeDefined()`, `toBeTruthy()`, `expect.anything()`, `expect.any(T)` where the value is what the test name promises.
+- Partial matchers (`toMatchObject`, `objectContaining`, substring `toContain`) ignore fields they do not name, so they cannot catch a leaked extra field.
+- Async: a promise assertion that is not returned or awaited, assertions in `.then`/`.catch` without `expect.assertions(n)`, an unused `done`. If the branch never runs the test passes.
+- Assertions inside loops, callbacks or conditionals that can run zero times.
+- Expected values or snapshots copied from current output.
+
+For each one found, state the one-change counterexample (the implementation edit or input) that still passes.
+
 ## Test sensitivity, mutation, and limitations
 
 - **Counterexample inspection**: propose a small incorrect behavior (e.g., skip ownership check). Determine whether the test would detect it. Prefer deterministic static demonstration or an isolated toy fixture.
