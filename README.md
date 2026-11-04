@@ -79,4 +79,4 @@ python3 -m unittest discover -s tests
 
 eval 작업 공간은 `~/.claude/skills/evidence-code-review-workspace/`에 있다. 실제 커밋 2건과 픽스처 1건으로 블라인드 채점을 했다. 마지막 기록은 iteration-9(0.3.5, effort medium/high 비교)다.
 
-0.4.0은 iteration-10에서 측정했다. Verify 모드에서 확인하지 못한 후보를 `plausible`로 올리는 경우가 13건에서 2건으로 줄었고, JSON-only 결과는 후보를 빠짐없이 담았다. 단일 리뷰 품질은 n=3에서 구분되지 않았다. 0.4.0 run 2건이 외부에서 SDK 소스를 받아 왔고, 0.4.1은 이를 막는 문장을 추가했다.
+0.4.0은 iteration-10에서 측정했다. Verify 모드에서 확인하지 못한 후보를 `plausible`로 올리는 경우가 13건에서 2건으로 줄었고, JSON-only 결과는 후보를 빠짐없이 담았다. 단일 리뷰 품질은 n=3에서 구분되지 않았다. 같은 날 다시 돌린 0.3.5도 외부에서 SDK 소스를 받아 왔으므로, 이 동작은 버전이 아니라 실행 환경 변화에서 왔다(iteration-13). 0.4.1은 이를 막는 문장을 추가했고, 0.4.1 run 9건에서 웹 호출은 0건이었다.
