@@ -65,6 +65,7 @@ python3 -m unittest discover -s tests
 
 | 버전 | 변경 |
 |---|---|
+| 0.4.1 | `unverified` 근거를 저장소 밖(네트워크, 다른 프로젝트 의존성)에서 채우지 않도록 명시 |
 | 0.4.0 | `unverified` 판정, JSON `candidate_verdicts`, snapshot 리뷰(`scope.kind`), 스키마 1.2, 테스트 읽기 순서 강제 제거, 비 UTF-8 입력 처리 |
 | 0.3.5 | 부정 테스트 예시 문장 보강 |
 | 0.3.4 | 1.0 스키마 설명 정리, lenses 예시를 멱등 결제로 교체 |
@@ -78,4 +79,4 @@ python3 -m unittest discover -s tests
 
 eval 작업 공간은 `~/.claude/skills/evidence-code-review-workspace/`에 있다. 실제 커밋 2건과 픽스처 1건으로 블라인드 채점을 했다. 마지막 기록은 iteration-9(0.3.5, effort medium/high 비교)다.
 
-0.4.0은 아직 eval을 돌리지 않았다. 검증기 테스트만 통과했고, 바뀐 지시문이 모델 리뷰 품질에 미치는 영향은 측정하지 않았다.
+0.4.0은 iteration-10에서 측정했다. Verify 모드에서 확인하지 못한 후보를 `plausible`로 올리는 경우가 13건에서 2건으로 줄었고, JSON-only 결과는 후보를 빠짐없이 담았다. 단일 리뷰 품질은 n=3에서 구분되지 않았다. 0.4.0 run 2건이 외부에서 SDK 소스를 받아 왔고, 0.4.1은 이를 막는 문장을 추가했다.

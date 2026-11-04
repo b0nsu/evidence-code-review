@@ -1,7 +1,7 @@
 ---
 name: evidence-code-review
 metadata:
-  version: "0.4.0"
+  version: "0.4.1"
 description: >
   Evidence-based code and test review for a PR, commit, diff, or an explicit code area
   (snapshot review, no change baseline needed).
@@ -64,7 +64,7 @@ Use this when the input includes findings from another reviewer or tool (pasted 
 - For each candidate: check its factual premise in the code (`path:line`), its reachability from the changed entry point, and any author-stated intent (tests, docstrings, commit message) or counterevidence. Then give one verdict:
   - `confirmed`: premise true, reachable, and contradicts a grounded contract or invariant. Report it as a finding under the usual rules.
   - `plausible`: premise and reachability checked and true, but the contract is unclear or the trigger is unproven. Record it as an assurance gap or contract unknown.
-  - `unverified`: the evidence needed to check the premise or reachability was not available (repository, base commit, file, generated code or call path not accessible). Name the missing evidence. Do not use `plausible` or `rejected` for a candidate whose premise you could not read.
+  - `unverified`: the evidence needed to check the premise or reachability was not available (repository, base commit, file, generated code or call path not accessible). Name the missing evidence. Do not use `plausible` or `rejected` for a candidate whose premise you could not read. Do not fill the gap from outside the reviewed repository (network fetches, other projects' dependencies); leave the candidate `unverified`.
   - `rejected`: premise false, path unreachable, or behavior permitted by an independently grounded contract or invariant. Name the deciding evidence. A test, comment or commit message saying the behavior is intended shows what the author meant, not that it is right; when that is the only support, use `plausible` and state what the intended behavior gives up.
 - When the candidate's scenario is wrong but its conclusion holds through another path, say so and give the correct path. Merge candidates that share a root cause.
 - After the candidates, make one bounded pass of your own (the producer and sibling-outcome check above, plus the assertion-breaking check on changed tests) and report anything new separately as verifier additions.
