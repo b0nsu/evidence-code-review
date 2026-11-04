@@ -1,5 +1,10 @@
 # Review / handoff contract v1.2
 
+## Contents
+
+- Default report (Markdown): report sections, required finding fields, severity P0-P3
+- Optional JSON schema_version 1.2: example document, review kind (`scope.kind`), mode and candidate verdicts, versions
+
 ## Default report (Markdown)
 
 Use a clear split, not a three-column scorecard that implies correctness is proved:
