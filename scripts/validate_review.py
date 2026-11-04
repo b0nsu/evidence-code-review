@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate review JSON v1.1 structure + limited internal consistency.
+"""Validate review JSON v1.2 (or legacy v1.1) structure + limited internal consistency.
 
 This does NOT establish that a code defect exists, a test is valid, or a check ran.
 Usage: python scripts/validate_review.py review.json
@@ -18,6 +18,10 @@ ASSESSMENTS = {"supported", "risk", "unknown"}
 CHECK_STATUSES = {"pass", "fail", "not_run"}
 VERIFICATION_STATUSES = {"executed", "static_trace"}
 CONCLUSION_STATUSES = {"issues_found", "no_actionable_findings", "incomplete"}
+SCHEMA_VERSIONS = {"1.1", "1.2"}
+MODES = {"review", "verify"}
+SCOPE_KINDS = {"diff", "snapshot"}
+VERDICTS = {"confirmed", "plausible", "rejected", "unverified"}
 
 
 def valid_enum(value, allowed):
@@ -52,13 +56,35 @@ def validate(review):
     problems = []
     if not isinstance(review, dict):
         return ["root must be a JSON object"]
-    if review.get("schema_version") != "1.1":
-        problems.append("schema_version must be '1.1'")
+    version = review.get("schema_version")
+    if not valid_enum(version, SCHEMA_VERSIONS):
+        problems.append("schema_version must be '1.2' (or legacy '1.1')")
+    legacy = version == "1.1"
+
+    mode = "review"
+    if legacy:
+        for key in ("mode", "candidate_verdicts"):
+            if key in review:
+                problems.append(f"{key} requires schema_version '1.2'")
+    else:
+        mode = review.get("mode")
+        if not valid_enum(mode, MODES):
+            problems.append("mode invalid")
 
     scope = obj(review.get("scope"), "scope", problems)
     files = []
     if scope is not None:
-        require_strings(scope, ("base", "target"), "scope", problems)
+        kind = "diff" if legacy else scope.get("kind")
+        if legacy and "kind" in scope:
+            problems.append("scope.kind requires schema_version '1.2'")
+        if not legacy and not valid_enum(kind, SCOPE_KINDS):
+            problems.append("scope.kind invalid")
+        if kind == "snapshot":
+            require_strings(scope, ("target",), "scope", problems)
+            if scope.get("base") is not None:
+                problems.append("scope.base must be omitted or null for a snapshot review")
+        else:
+            require_strings(scope, ("base", "target"), "scope", problems)
         files = array(scope.get("files_reviewed"), "scope.files_reviewed", problems)
         for i, val in enumerate(files):
             if not nonempty(val):
@@ -124,6 +150,40 @@ def validate(review):
         if (u := obj(unknown, f"contract_unknowns[{i}]", problems)) is not None:
             require_strings(u, ("question", "blocked_decision", "evidence"), f"contract_unknowns[{i}]", problems)
 
+    has_unverified = False
+    verdicts = review.get("candidate_verdicts", [])
+    if not legacy and mode == "review" and verdicts not in ([], None):
+        problems.append("candidate_verdicts must be omitted or empty when mode=review")
+    if mode == "verify":
+        verdicts = array(verdicts, "candidate_verdicts", problems)
+        if not verdicts:
+            problems.append("mode=verify requires a nonempty candidate_verdicts list")
+        seen_candidates = set()
+        for i, verdict in enumerate(verdicts):
+            prefix = f"candidate_verdicts[{i}]"
+            if (v := obj(verdict, prefix, problems)) is None:
+                continue
+            require_strings(v, ("candidate_id", "deciding_evidence"), prefix, problems)
+            cid = v.get("candidate_id")
+            if isinstance(cid, str):
+                if cid in seen_candidates:
+                    problems.append(f"{prefix}.candidate_id duplicated: {cid}")
+                seen_candidates.add(cid)
+            value = v.get("verdict")
+            if not valid_enum(value, VERDICTS):
+                problems.append(f"{prefix}.verdict invalid")
+                continue
+            if value == "confirmed":
+                fid = v.get("finding_id")
+                if not nonempty(fid):
+                    problems.append(f"{prefix}.finding_id required for confirmed")
+                elif fid not in seen_ids:
+                    problems.append(f"{prefix}.finding_id {fid} does not match any finding")
+            if value in ("plausible", "unverified") and not nonempty(v.get("limitation")):
+                problems.append(f"{prefix}.limitation required for {value}")
+            if value == "unverified":
+                has_unverified = True
+
     conclusion = obj(review.get("conclusion"), "conclusion", problems)
     if conclusion is not None:
         status = conclusion.get("status")
@@ -138,6 +198,8 @@ def validate(review):
             problems.append("conclusion claims incomplete while confirmed findings present; use issues_found and report limits")
         if not files and status != "incomplete":
             problems.append("empty reviewed scope must use conclusion.status=incomplete")
+        if has_unverified and status == "no_actionable_findings":
+            problems.append("unverified candidates present; use incomplete (or issues_found with findings)")
     return problems
 
 
@@ -147,7 +209,7 @@ def main():
         return 2
     try:
         data = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(f"Cannot load JSON: {exc}", file=sys.stderr)
         return 2
     issues = validate(data)
