@@ -17,7 +17,9 @@ The skill only reads. It may run existing, narrow local checks such as a project
 Copy the skill files into your personal skills directory:
 
 ```bash
-rsync -a --delete --exclude .git --exclude tests --exclude docs --exclude README.md ./ ~/.claude/skills/evidence-code-review/
+rsync -a --delete --delete-excluded --exclude __pycache__ \
+  --include /SKILL.md --include '/references/***' --include '/scripts/***' --exclude '*' \
+  ./ ~/.claude/skills/evidence-code-review/
 ```
 
 Claude Code watches `~/.claude/skills/`, so the skill is available in the current session without a restart. To install it for one repository only, copy it to that repository's `.claude/skills/evidence-code-review/` instead.
