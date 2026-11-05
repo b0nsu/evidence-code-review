@@ -1,5 +1,6 @@
 ---
 name: evidence-code-review
+license: MIT
 metadata:
   version: "0.4.1"
 description: >

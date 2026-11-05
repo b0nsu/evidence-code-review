@@ -150,3 +150,7 @@ Iteration 10 measured 0.4.0. In verify mode, unchecked candidates promoted to `p
 In iterations 10 to 12, 0.4.x looked worse on the admin case. Iteration 13 reran 0.3.5 on the same day and saw the same shifts: more false claims, an inflated severity, and SDK source fetched from the network. The cause was a change in the run environment.
 
 After 0.4.1 added the boundary sentence, its 9 runs made 0 web calls. The same-day 0.3.5 runs made web calls in 1 of 3.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
