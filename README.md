@@ -98,10 +98,17 @@ references/test-quality.md            Test oracles, matcher traps, counterexampl
 references/verification-playbook.md   Checks per risk type and allowed execution
 scripts/validate_review.py            JSON output validator
 tests/test_validate_review.py         Validator regression tests
+tests/test_post_review.py             Review bot posting tests
+bot/                                  GitHub review bot: posting script, prompt, setup notes
+.github/workflows/evidence-code-review.yml   Runs the bot on an `ai-review` label or `/review` comment
 docs/audits/                          Prompt audit report and patch
 ```
 
-The installed skill needs only `SKILL.md`, `references/` and `scripts/`. `README.md`, `tests/` and `docs/` stay in the repository.
+The installed skill needs only `SKILL.md`, `references/` and `scripts/`. `README.md`, `tests/`, `bot/`, `.github/` and `docs/` stay in the repository.
+
+## GitHub review bot
+
+Add the `ai-review` label to a pull request, or comment `/review`, to get the skill's review as a PR review: high-confidence P0-P2 findings inline, everything else in the review body. The model runs in a job without a write token, and a separate job validates the JSON and posts it. Setup and the security model are in [bot/README.md](bot/README.md).
 
 ## Development
 
