@@ -108,7 +108,7 @@ The installed skill needs only `SKILL.md`, `references/` and `scripts/`. `README
 
 ## GitHub review bot
 
-Add the `ai-review` label to a pull request, or comment `/review`, to get the skill's review as a PR review: high-confidence P0-P2 findings inline, everything else in the review body. The model runs in a job without a write token, and a separate job validates the JSON and posts it. Setup and the security model are in [bot/README.md](bot/README.md).
+Add the `ai-review` label to a pull request, or comment `/review`, to get the skill's review on the PR: each finding as an inline comment on its lines, and the summary, assurance gaps and contract unknowns in one separate comment that reruns edit in place. The model runs in a job without a write token, and a separate job validates the JSON and posts it. Setup and the security model are in [bot/README.md](bot/README.md).
 
 ## Development
 
