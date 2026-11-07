@@ -1,0 +1,224 @@
+# Review a pull request with the evidence-code-review skill.
+#
+# Triggers, all limited to same-repository PRs:
+#   - the "ai-review" label added to a PR (needs triage access). GitHub reads
+#     the workflow from the PR's merge ref, so the file only has to be on the
+#     PR's base branch, e.g. develop.
+#   - a comment that is exactly "/review", by an owner, member or
+#     collaborator. GitHub reads the workflow from the default branch only.
+#   - a manual run with a PR number.
+# The label is removed after the run, so adding it again reviews again.
+#
+# Two jobs keep the model away from the write token:
+#   review   runs Claude Code on the PR checkout with a read-only token in the
+#            job and no token in the model's step. Claude Code runs with
+#            --restricted, so the PR's .claude/settings.json hooks do not run
+#            and there is no Bash, PowerShell or WebFetch.
+#   publish  runs no model. It validates the JSON and posts one review.
+#
+# Fork PRs are refused: issue_comment runs with repository secrets.
+#
+# The skill, prompt and posting script come from ECR_SKILL_REPO, never from
+# the PR, so text in the PR cannot change them. With the label trigger the
+# workflow file itself is read from the PR's merge ref, so a writer who edits
+# this file in a PR controls that run; they could push any workflow anyway.
+#
+# Setup: add the ECR_ANTHROPIC_API_KEY or ECR_CLAUDE_CODE_OAUTH_TOKEN
+# repository secret, and create the "ai-review" label.
+
+name: evidence-code-review
+
+on:
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number
+        required: true
+        type: number
+
+permissions: {}
+
+# No workflow-level concurrency with cancel-in-progress: every PR comment
+# starts a run of this workflow, and an ordinary comment would cancel a
+# running review.
+
+env:
+  # Skill and bot code come from here, never from the PR under review.
+  ECR_SKILL_REPO: b0nsu/evidence-code-review
+  ECR_SKILL_REF: main
+  ECR_CLAUDE_CODE_VERSION: "2.1.318"
+  ECR_MODEL: claude-opus-5-5
+  ECR_MAX_BUDGET_USD: "5"
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.label.name == 'ai-review') ||
+      (github.event.issue.pull_request &&
+       github.event.comment.body == '/review' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      number: ${{ steps.pr.outputs.number }}
+      head_sha: ${{ steps.pr.outputs.head_sha }}
+    steps:
+      - name: Resolve pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" > "$RUNNER_TEMP/pr.json"
+          head_repo=$(jq -r '.head.repo.full_name // "deleted"' "$RUNNER_TEMP/pr.json")
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::Refusing to review a PR from $head_repo: only same-repository PRs are reviewed."
+            exit 1
+          fi
+          {
+            echo "number=$PR"
+            echo "head_sha=$(jq -r .head.sha "$RUNNER_TEMP/pr.json")"
+            echo "base_sha=$(jq -r .base.sha "$RUNNER_TEMP/pr.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Check out skill and bot
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ECR_SKILL_REPO }}
+          ref: ${{ env.ECR_SKILL_REF }}
+          path: trusted
+          persist-credentials: false
+
+      - name: Check out PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          path: pr
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare review context and skill plugin
+        env:
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          ctx="$RUNNER_TEMP/ctx"
+          plugin="$RUNNER_TEMP/plugin"
+          mkdir -p "$ctx" "$plugin/.claude-plugin" "$plugin/skills/evidence-code-review"
+          git -C pr diff --no-color "$BASE_SHA...$HEAD_SHA" > "$ctx/pr.diff"
+          git -C pr log --no-color --format='commit %H%n%n%B' "$BASE_SHA..$HEAD_SHA" > "$ctx/commits.txt"
+          jq '{number, title, body, base: .base.ref, head: .head.ref}' "$RUNNER_TEMP/pr.json" > "$ctx/pr.json"
+          rm -rf pr/.claude pr/.mcp.json
+          cp -R trusted/SKILL.md trusted/references trusted/scripts "$plugin/skills/evidence-code-review/"
+          echo '{"name":"ecr","version":"0.0.0","description":"evidence-code-review skill for CI"}' \
+            > "$plugin/.claude-plugin/plugin.json"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Claude Code
+        run: npm install -g "@anthropic-ai/claude-code@$ECR_CLAUDE_CODE_VERSION"
+
+      - name: Run review
+        working-directory: pr
+        env:
+          # Bot-only secret names, so the bot never picks up a credential
+          # another workflow in the repository put there for itself.
+          SECRET_API_KEY: ${{ secrets.ECR_ANTHROPIC_API_KEY }}
+          SECRET_OAUTH_TOKEN: ${{ secrets.ECR_CLAUDE_CODE_OAUTH_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          BASE_SHA: ${{ steps.pr.outputs.base_sha }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          # Export only the credential that is set; an empty variable can
+          # shadow the other one.
+          if [ -n "$SECRET_API_KEY" ]; then
+            export ANTHROPIC_API_KEY="$SECRET_API_KEY"
+          elif [ -n "$SECRET_OAUTH_TOKEN" ]; then
+            export CLAUDE_CODE_OAUTH_TOKEN="$SECRET_OAUTH_TOKEN"
+          else
+            echo "::error::Set the ECR_ANTHROPIC_API_KEY or ECR_CLAUDE_CODE_OAUTH_TOKEN secret."
+            exit 1
+          fi
+          unset SECRET_API_KEY SECRET_OAUTH_TOKEN
+          export CTX_DIR="$RUNNER_TEMP/ctx"
+          prompt=$(python3 -c 'import os, string, sys; print(string.Template(open(sys.argv[1]).read()).safe_substitute({k: os.environ[k] for k in ("PR_NUMBER", "BASE_SHA", "HEAD_SHA", "CTX_DIR")}))' ../trusted/bot/review-prompt.md)
+          set +e
+          claude -p "$prompt" \
+            --restricted --strict-mcp-config \
+            --plugin-dir "$RUNNER_TEMP/plugin" \
+            --add-dir "$CTX_DIR" "$RUNNER_TEMP/plugin" \
+            --tools "Read,Grep,Glob,Skill" \
+            --permission-prompts none \
+            --model "$ECR_MODEL" \
+            --max-budget-usd "$ECR_MAX_BUDGET_USD" \
+            --output-format json \
+            --no-session-persistence \
+            < /dev/null > "$RUNNER_TEMP/claude-output.json"
+          status=$?
+          set -e
+          echo "Claude Code exit status: $status"
+          jq -r '"subtype=\(.subtype) turns=\(.num_turns) cost_usd=\(.total_cost_usd)"' \
+            "$RUNNER_TEMP/claude-output.json" || true
+
+      - name: Upload Claude Code output
+        uses: actions/upload-artifact@v4
+        with:
+          name: claude-output
+          path: ${{ runner.temp }}/claude-output.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check out bot
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.ECR_SKILL_REPO }}
+          ref: ${{ env.ECR_SKILL_REF }}
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: |
+            bot
+            scripts
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: claude-output
+          path: ${{ runner.temp }}/out
+
+      - name: Validate and post review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.review.outputs.number }}
+          HEAD_SHA: ${{ needs.review.outputs.head_sha }}
+        run: |
+          python3 trusted/bot/post_review.py \
+            --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR" \
+            --head-sha "$HEAD_SHA" \
+            --claude-output "$RUNNER_TEMP/out/claude-output.json" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+      - name: Remove trigger label
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ needs.review.outputs.number }}
+        run: gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/ai-review"
