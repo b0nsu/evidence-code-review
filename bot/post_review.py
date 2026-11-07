@@ -9,10 +9,16 @@ This script holds the write token and never runs a model. The review job that
 runs the model has no write token. Failures to extract or validate are posted
 as a short PR comment and exit with status 1.
 
+With --summary comment, the review carries only the inline comments and the
+summary goes into one PR comment that later runs edit in place.
+
 Usage:
   post_review.py --repo OWNER/NAME --pr N --head-sha SHA \
       --claude-output claude-output.json [--run-url URL] \
-      [--files-json files.json --comments-json comments.json] [--dry-run]
+      [--summary review|comment] [--inline-severities P0,P1,P2,P3] \
+      [--inline-confidences high,medium] \
+      [--files-json files.json --comments-json comments.json \
+       --issue-comments-json issue-comments.json] [--dry-run]
 
 Environment: GH_TOKEN or GITHUB_TOKEN (not needed with --dry-run and both
 --files-json and --comments-json), GITHUB_API_URL (optional).
@@ -20,6 +26,7 @@ Environment: GH_TOKEN or GITHUB_TOKEN (not needed with --dry-run and both
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import json
@@ -28,12 +35,15 @@ import pathlib
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 VALIDATOR = ROOT / "scripts" / "validate_review.py"
 
 SUMMARY_MARKER = "<!-- evidence-code-review -->"
+REVIEW_MARKER = "<!-- evidence-code-review:inline -->"
+SUMMARY_MODES = ("review", "comment")
 FP_RE = re.compile(r"<!-- ecr:fp=([0-9a-f]{12}) -->")
 HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 BOT_LOGIN = "github-actions[bot]"
@@ -213,19 +223,19 @@ def render_summary(review: dict, plan: dict, *, head_sha: str, run_url: str | No
     if scope.get("target") != head_sha:
         warnings.append(f"the review names target `{cell(scope.get('target'))}`, the PR head is `{short(head_sha)}`")
     if rejected_anchors:
-        warnings.append("GitHub rejected the inline anchors, so every finding is in this body")
+        warnings.append("GitHub rejected the inline anchors, so every finding is listed here")
     if warnings:
         out.append("Warning: " + "; ".join(warnings) + ".")
 
     total = len(review.get("findings") or [])
     if total:
         out.append(
-            f"Findings: {total} (inline: {len(plan['inline'])}, in this body: {len(plan['body'])}, "
+            f"Findings: {total} (inline: {len(plan['inline'])}, listed here: {len(plan['body'])}, "
             f"already commented in an earlier run: {len(plan['repeated'])})"
         )
 
     if plan["body"]:
-        out.append("#### Findings in this body")
+        out.append("#### Findings listed here")
         for finding, fp, reason in plan["body"]:
             out.append(
                 f"<details><summary>[{finding.get('severity')}] {cell(finding.get('title'))} · "
@@ -314,7 +324,16 @@ def render_failure(reason: str, run_url: str | None) -> str:
 
 def plan_review(review: dict, hunks_by_path: dict, posted_fps: set,
                 inline_severities=DEFAULT_INLINE_SEVERITIES,
-                inline_confidences=DEFAULT_INLINE_CONFIDENCES) -> dict:
+                inline_confidences=DEFAULT_INLINE_CONFIDENCES,
+                line_counts: dict | None = None) -> dict:
+    """Split findings into inline comments, summary entries and repeats.
+
+    line_counts maps a path to its line count at the reviewed revision. A
+    finding whose cited lines run past the end of its file has a wrong line
+    number (for example a position inside the diff file), so it is never
+    anchored inline, even if the bad number happens to fall in a hunk.
+    """
+    line_counts = line_counts or {}
     inline, body, repeated = [], [], []
     findings = sorted(
         review.get("findings") or [],
@@ -328,6 +347,11 @@ def plan_review(review: dict, hunks_by_path: dict, posted_fps: set,
             continue
         if finding.get("severity") not in inline_severities or finding.get("confidence") not in inline_confidences:
             body.append((finding, fp, "below the inline threshold"))
+            continue
+        count = line_counts.get(loc.get("path"))
+        end = max(loc.get("line_start") or 0, loc.get("line_end") or 0)
+        if isinstance(count, int) and end > count:
+            body.append((finding, fp, f"cited line is past the end of the file ({count} lines)"))
             continue
         anchor = place(loc, hunks_by_path.get(loc.get("path"), []))
         if anchor is None:
@@ -347,6 +371,7 @@ def without_inline(plan: dict, reason: str) -> dict:
 
 def build_payload(review: dict, plan: dict, *, head_sha: str, run_url=None,
                   run_note=None, rejected_anchors=False) -> dict:
+    """One review whose body is the full summary (summary mode "review")."""
     return {
         "commit_id": head_sha,
         "event": "COMMENT",
@@ -354,6 +379,27 @@ def build_payload(review: dict, plan: dict, *, head_sha: str, run_url=None,
                                run_note=run_note, rejected_anchors=rejected_anchors),
         "comments": [comment for _, _, comment in plan["inline"]],
     }
+
+
+def build_inline_payload(plan: dict, *, head_sha: str) -> dict:
+    """A review that carries only the inline comments (summary mode "comment")."""
+    count = len(plan["inline"])
+    return {
+        "commit_id": head_sha,
+        "event": "COMMENT",
+        "body": f"{REVIEW_MARKER}\nEvidence code review: {count} finding{'s' if count != 1 else ''} "
+                "commented inline. The summary and open questions are in a separate comment.",
+        "comments": [comment for _, _, comment in plan["inline"]],
+    }
+
+
+def find_summary_comment(issue_comments: list):
+    """The bot's earlier summary or failure comment, so a rerun edits it in place."""
+    for comment in issue_comments:
+        if (comment.get("user") or {}).get("login") == BOT_LOGIN and \
+                (comment.get("body") or "").startswith(SUMMARY_MARKER):
+            return comment
+    return None
 
 
 def posted_fingerprints(comments: list) -> set:
@@ -367,6 +413,14 @@ def posted_fingerprints(comments: list) -> set:
 
 def hunks_from_files(files: list) -> dict:
     return {f.get("filename"): parse_patch(f.get("patch")) for f in files}
+
+
+def count_lines(text: str) -> int:
+    return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+
+
+def cited_paths(review: dict) -> list:
+    return sorted({(f.get("location") or {}).get("path") for f in review.get("findings") or []} - {None})
 
 
 def run_note_from(output: dict) -> str | None:
@@ -409,6 +463,19 @@ class GitHub:
             raw = resp.read()
             return (json.loads(raw) if raw else None), resp.headers.get("Link", "")
 
+    def line_count(self, path: str, ref: str):
+        """Line count of a file at ref, or None when it cannot be read."""
+        try:
+            data, _ = self.request("GET", f"/contents/{urllib.parse.quote(path)}?ref={ref}")
+        except urllib.error.HTTPError:
+            return None
+        if not isinstance(data, dict) or data.get("encoding") != "base64":
+            return None
+        try:
+            return count_lines(base64.b64decode(data.get("content", "")).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+
     def paginate(self, path: str) -> list:
         url = self.base + path + ("&" if "?" in path else "?") + "per_page=100"
         items = []
@@ -431,8 +498,15 @@ def parse_args(argv):
     parser.add_argument("--run-url")
     parser.add_argument("--files-json", type=pathlib.Path, help="PR files list instead of the API")
     parser.add_argument("--comments-json", type=pathlib.Path, help="PR review comments instead of the API")
+    parser.add_argument("--line-counts-json", type=pathlib.Path,
+                        help="{path: line count} at the head revision instead of the API (offline runs default to none)")
+    parser.add_argument("--issue-comments-json", type=pathlib.Path,
+                        help="PR conversation comments instead of the API (offline runs default to none)")
     parser.add_argument("--inline-severities", default=",".join(DEFAULT_INLINE_SEVERITIES))
     parser.add_argument("--inline-confidences", default=",".join(DEFAULT_INLINE_CONFIDENCES))
+    parser.add_argument("--summary", choices=SUMMARY_MODES, default="review",
+                        help="review: summary is the review body. comment: inline comments in a review, "
+                             "summary in one PR comment that later runs edit in place")
     parser.add_argument("--dry-run", action="store_true", help="print the request instead of posting")
     return parser.parse_args(argv)
 
@@ -446,11 +520,23 @@ def main(argv=None) -> int:
         return 2
     gh = GitHub(args.repo, token or "", os.environ.get("GITHUB_API_URL"))
 
-    def emit(path, payload):
+    def emit(path, payload, method="POST"):
         if args.dry_run:
-            print(json.dumps({"POST": path, "payload": payload}, indent=2, ensure_ascii=False))
+            print(json.dumps({"method": method, "path": path, "payload": payload}, indent=2, ensure_ascii=False))
         else:
-            gh.request("POST", path, payload)
+            gh.request(method, path, payload)
+
+    def issue_comments():
+        if args.issue_comments_json is not None:
+            return json.loads(args.issue_comments_json.read_text(encoding="utf-8"))
+        return [] if offline else gh.paginate(f"/issues/{args.pr}/comments")
+
+    def upsert_summary(body):
+        existing = find_summary_comment(issue_comments())
+        if existing:
+            emit(f"/issues/comments/{existing['id']}", {"body": body}, method="PATCH")
+        else:
+            emit(f"/issues/{args.pr}/comments", {"body": body})
 
     output = None
     try:
@@ -464,7 +550,7 @@ def main(argv=None) -> int:
             raise OutputError("review JSON failed validation:\n" + "\n".join(f"- {p}" for p in problems))
     except OutputError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
-        emit(f"/issues/{args.pr}/comments", {"body": render_failure(str(exc), args.run_url)})
+        upsert_summary(render_failure(str(exc), args.run_url))
         return 1
 
     if offline:
@@ -474,27 +560,51 @@ def main(argv=None) -> int:
         files = gh.paginate(f"/pulls/{args.pr}/files")
         comments = gh.paginate(f"/pulls/{args.pr}/comments")
 
+    if args.line_counts_json is not None:
+        line_counts = json.loads(args.line_counts_json.read_text(encoding="utf-8"))
+    elif offline:
+        line_counts = {}
+    else:
+        line_counts = {p: gh.line_count(p, args.head_sha) for p in cited_paths(review)}
+
     plan = plan_review(
         review,
         hunks_from_files(files),
         posted_fingerprints(comments),
         inline_severities=tuple(s for s in args.inline_severities.split(",") if s),
         inline_confidences=tuple(c for c in args.inline_confidences.split(",") if c),
+        line_counts=line_counts,
     )
     note = run_note_from(output)
     path = f"/pulls/{args.pr}/reviews"
-    payload = build_payload(review, plan, head_sha=args.head_sha, run_url=args.run_url, run_note=note)
-    try:
-        emit(path, payload)
-    except urllib.error.HTTPError as exc:
-        if exc.code != 422 or not plan["inline"]:
-            raise
-        print(f"GitHub rejected the review ({exc.code}); retrying without inline comments", file=sys.stderr)
-        fallback = without_inline(plan, "GitHub rejected the inline anchor")
-        emit(path, build_payload(review, fallback, head_sha=args.head_sha, run_url=args.run_url,
-                                 run_note=note, rejected_anchors=True))
-    print(f"{'Planned' if args.dry_run else 'Posted'} review: {len(plan['inline'])} inline, {len(plan['body'])} in body, "
-          f"{len(plan['repeated'])} already commented", file=sys.stderr)
+    rejected = False
+
+    if args.summary == "review":
+        try:
+            emit(path, build_payload(review, plan, head_sha=args.head_sha, run_url=args.run_url, run_note=note))
+        except urllib.error.HTTPError as exc:
+            if exc.code != 422 or not plan["inline"]:
+                raise
+            print(f"GitHub rejected the review ({exc.code}); retrying without inline comments", file=sys.stderr)
+            plan = without_inline(plan, "GitHub rejected the inline anchor")
+            emit(path, build_payload(review, plan, head_sha=args.head_sha, run_url=args.run_url,
+                                     run_note=note, rejected_anchors=True))
+    else:
+        if plan["inline"]:
+            try:
+                emit(path, build_inline_payload(plan, head_sha=args.head_sha))
+            except urllib.error.HTTPError as exc:
+                if exc.code != 422:
+                    raise
+                print(f"GitHub rejected the inline review ({exc.code}); listing findings in the summary",
+                      file=sys.stderr)
+                plan = without_inline(plan, "GitHub rejected the inline anchor")
+                rejected = True
+        upsert_summary(render_summary(review, plan, head_sha=args.head_sha, run_url=args.run_url,
+                                      run_note=note, rejected_anchors=rejected))
+
+    print(f"{'Planned' if args.dry_run else 'Posted'} ({args.summary} summary): {len(plan['inline'])} inline, "
+          f"{len(plan['body'])} listed in the summary, {len(plan['repeated'])} already commented", file=sys.stderr)
     return 0
 
 

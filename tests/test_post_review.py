@@ -7,6 +7,7 @@ Run: python3 -m unittest discover -s tests
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import copy
 import importlib.util
@@ -25,6 +26,10 @@ CONTRACT = ROOT / "references" / "finding-contract.md"
 _spec = importlib.util.spec_from_file_location("post_review", ROOT / "bot" / "post_review.py")
 post_review = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(post_review)
+
+_aspec = importlib.util.spec_from_file_location("annotate_diff", ROOT / "bot" / "annotate_diff.py")
+annotate_diff = importlib.util.module_from_spec(_aspec)
+_aspec.loader.exec_module(annotate_diff)
 
 REVIEW = json.loads(re.findall(r"```json\n(.*?)```", CONTRACT.read_text(encoding="utf-8"), re.S)[0])
 HEAD = "a" * 40
@@ -105,6 +110,47 @@ class AnchorTests(unittest.TestCase):
                 self.assertEqual(post_review.place(loc, hunks), expected)
 
 
+class AnnotateDiffTests(unittest.TestCase):
+    DIFF = "\n".join([
+        "diff --git a/src/orders.py b/src/orders.py",
+        "index 1111111..2222222 100644",
+        "--- a/src/orders.py",
+        "+++ b/src/orders.py",
+        ORDERS_PATCH,
+        "diff --git a/new.py b/new.py",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/new.py",
+        "@@ -0,0 +1,2 @@",
+        "+a",
+        "+b",
+    ]) + "\n"
+
+    def rows(self):
+        out = "".join(annotate_diff.annotate(io.StringIO(self.DIFF)))
+        return [l for l in out.splitlines() if "|" in l and not l.startswith("#")]
+
+    def test_new_side_numbers_follow_hunk_headers(self):
+        new_numbers = []
+        for row in self.rows():
+            left, _, _ = row.partition("|")
+            parts = left.split()
+            if left.rstrip().endswith("-") or not parts or not parts[-1].isdigit() and parts[-1] != "+":
+                continue
+            nums = [p for p in parts if p.isdigit()]
+            new_numbers.append(int(nums[-1]))
+        # orders.py hunks: 40-44 and 59-60; new.py: 1-2.
+        self.assertEqual(new_numbers, [40, 41, 42, 43, 44, 59, 60, 1, 2])
+
+    def test_removed_lines_carry_only_the_old_number(self):
+        removed = [r for r in self.rows() if r.split("|")[0].rstrip().endswith("-")]
+        self.assertEqual([r.split()[0] for r in removed], ["41", "58"])
+
+    def test_header_warns_about_viewer_line_numbers(self):
+        out = "".join(annotate_diff.annotate(io.StringIO("")))
+        self.assertIn("not source lines", out)
+
+
 class PlanTests(unittest.TestCase):
     def plan(self, findings, comments=()):
         review = dict(REVIEW, findings=findings)
@@ -145,6 +191,18 @@ class PlanTests(unittest.TestCase):
     def test_marker_from_another_user_is_ignored(self):
         fp = post_review.fingerprint(finding())
         plan = self.plan([finding()], [{"user": {"login": "someone"}, "body": f"<!-- ecr:fp={fp} -->"}])
+        self.assertEqual(len(plan["inline"]), 1)
+
+    def test_line_past_end_of_file_is_never_inline(self):
+        # A diff-file position (443) that happens to be cited for a 120-line file.
+        plan = post_review.plan_review(
+            dict(REVIEW, findings=[finding(location={"line_start": 42, "line_end": 443})]),
+            post_review.hunks_from_files(FILES), set(), line_counts={"src/orders.py": 120})
+        self.assertEqual(plan["inline"], [])
+        self.assertEqual(plan["body"][0][2], "cited line is past the end of the file (120 lines)")
+
+    def test_unknown_line_count_does_not_block_inline(self):
+        plan = post_review.plan_review(REVIEW, post_review.hunks_from_files(FILES), set(), line_counts={"src/orders.py": None})
         self.assertEqual(len(plan["inline"]), 1)
 
     def test_findings_are_ordered_by_severity(self):
@@ -201,11 +259,28 @@ class MainTests(unittest.TestCase):
             code = post_review.main(argv)
         return code, stdout.getvalue()
 
+    @staticmethod
+    def requests(out):
+        """Every request a --dry-run printed, in order."""
+        decoder, pos, found = json.JSONDecoder(), 0, []
+        while pos < len(out):
+            if out[pos].isspace():
+                pos += 1
+                continue
+            obj, pos = decoder.raw_decode(out, pos)
+            found.append(obj)
+        return found
+
+    def issue_comments(self, comments):
+        path = self.dir / "issue-comments.json"
+        path.write_text(json.dumps(comments))
+        return ["--issue-comments-json", str(path)]
+
     def test_dry_run_posts_one_review(self):
         code, out = self.run_main(claude_output(), ["--dry-run"])
         self.assertEqual(code, 0)
-        request = json.loads(out)
-        self.assertEqual(request["POST"], "/pulls/7/reviews")
+        [request] = self.requests(out)
+        self.assertEqual((request["method"], request["path"]), ("POST", "/pulls/7/reviews"))
         self.assertEqual(request["payload"]["event"], "COMMENT")
         self.assertEqual(request["payload"]["commit_id"], HEAD)
         self.assertEqual(len(request["payload"]["comments"]), 1)
@@ -216,19 +291,72 @@ class MainTests(unittest.TestCase):
         del broken["findings"][0]["trigger"]
         code, out = self.run_main(claude_output(broken), ["--dry-run"])
         self.assertEqual(code, 1)
-        request = json.loads(out)
-        self.assertEqual(request["POST"], "/issues/7/comments")
+        [request] = self.requests(out)
+        self.assertEqual((request["method"], request["path"]), ("POST", "/issues/7/comments"))
         self.assertIn("findings[0].trigger must be a nonempty string", request["payload"]["body"])
 
     def test_unreadable_output_posts_failure_comment(self):
         code, out = self.run_main("not json", ["--dry-run"])
         self.assertEqual(code, 1)
-        self.assertIn("cannot read Claude Code output", json.loads(out)["payload"]["body"])
+        self.assertIn("cannot read Claude Code output", self.requests(out)[0]["payload"]["body"])
+
+    def test_failure_edits_the_earlier_summary_comment(self):
+        earlier = [{"id": 99, "user": {"login": "github-actions[bot]"}, "body": post_review.SUMMARY_MARKER + "\nold"}]
+        code, out = self.run_main("not json", ["--dry-run", *self.issue_comments(earlier)])
+        self.assertEqual(code, 1)
+        [request] = self.requests(out)
+        self.assertEqual((request["method"], request["path"]), ("PATCH", "/issues/comments/99"))
+
+    def test_comment_mode_posts_inline_review_then_summary_comment(self):
+        code, out = self.run_main(claude_output(), ["--dry-run", "--summary", "comment"])
+        self.assertEqual(code, 0)
+        review, summary = self.requests(out)
+        self.assertEqual(review["path"], "/pulls/7/reviews")
+        self.assertEqual(len(review["payload"]["comments"]), 1)
+        self.assertTrue(review["payload"]["body"].startswith(post_review.REVIEW_MARKER))
+        self.assertNotIn("Assurance gaps", review["payload"]["body"])
+        self.assertEqual((summary["method"], summary["path"]), ("POST", "/issues/7/comments"))
+        self.assertTrue(summary["payload"]["body"].startswith(post_review.SUMMARY_MARKER))
+        self.assertIn("#### Assurance gaps", summary["payload"]["body"])
+
+    def test_comment_mode_inlines_p3_and_medium_when_asked(self):
+        review_doc = dict(REVIEW, findings=[finding(severity="P3", confidence="medium")])
+        code, out = self.run_main(claude_output(review_doc), [
+            "--dry-run", "--summary", "comment",
+            "--inline-severities", "P0,P1,P2,P3", "--inline-confidences", "high,medium"])
+        self.assertEqual(code, 0)
+        review, summary = self.requests(out)
+        self.assertEqual(len(review["payload"]["comments"]), 1)
+        self.assertNotIn("#### Findings listed here", summary["payload"]["body"])
+
+    def test_comment_mode_without_inline_findings_posts_only_the_summary(self):
+        outside = dict(REVIEW, findings=[finding(location={"line_start": 50, "line_end": 52})])
+        code, out = self.run_main(claude_output(outside), ["--dry-run", "--summary", "comment"])
+        self.assertEqual(code, 0)
+        [summary] = self.requests(out)
+        self.assertEqual(summary["path"], "/issues/7/comments")
+        self.assertIn("outside the diff", summary["payload"]["body"])
+
+    def test_comment_mode_rerun_edits_summary_and_skips_posted_finding(self):
+        fp = post_review.fingerprint(finding())
+        (self.dir / "comments.json").write_text(json.dumps(
+            [{"user": {"login": "github-actions[bot]"}, "body": f"x <!-- ecr:fp={fp} -->"}]))
+        earlier = [
+            {"id": 5, "user": {"login": "someone"}, "body": post_review.SUMMARY_MARKER + " forged"},
+            {"id": 6, "user": {"login": "github-actions[bot]"}, "body": post_review.SUMMARY_MARKER + "\nold"},
+        ]
+        code, out = self.run_main(claude_output(), ["--dry-run", "--summary", "comment", *self.issue_comments(earlier)])
+        self.assertEqual(code, 0)
+        [summary] = self.requests(out)
+        self.assertEqual((summary["method"], summary["path"]), ("PATCH", "/issues/comments/6"))
+        self.assertIn("Already commented in an earlier run", summary["payload"]["body"])
 
     def test_rejected_anchor_falls_back_to_body(self):
         calls = []
 
         def fake_request(_self, method, url, data=None):
+            if method == "GET":
+                return {"encoding": "base64", "content": base64.b64encode(b"x\n" * 100).decode()}, ""
             calls.append(data)
             if len(calls) == 1:
                 raise urllib.error.HTTPError(url, 422, "Unprocessable", {}, None)
@@ -242,6 +370,29 @@ class MainTests(unittest.TestCase):
         self.assertEqual(len(calls[0]["comments"]), 1)
         self.assertEqual(calls[1]["comments"], [])
         self.assertIn("GitHub rejected the inline anchor", calls[1]["body"])
+
+    def test_comment_mode_rejected_anchor_moves_findings_to_summary(self):
+        calls = []
+
+        def fake_request(_self, method, url, data=None):
+            calls.append((method, url, data))
+            if method == "GET" and "/contents/" in url:
+                return {"encoding": "base64", "content": base64.b64encode(b"x\n" * 100).decode()}, ""
+            if method == "GET":
+                return [], ""
+            if url.endswith("/reviews"):
+                raise urllib.error.HTTPError(url, 422, "Unprocessable", {}, None)
+            return {}, ""
+
+        with mock.patch.object(post_review.GitHub, "request", fake_request), \
+                mock.patch.dict("os.environ", {"GH_TOKEN": "t"}):
+            code, _ = self.run_main(claude_output(), ["--summary", "comment"])
+        self.assertEqual(code, 0)
+        writes = [(m, u.rsplit("/repos/o/r", 1)[-1]) for m, u, _ in calls if m != "GET"]
+        self.assertEqual(writes, [("POST", "/pulls/7/reviews"), ("POST", "/issues/7/comments")])
+        summary = calls[-1][2]["body"]
+        self.assertIn("GitHub rejected the inline anchor", summary)
+        self.assertIn("every finding is listed here", summary)
 
 
 if __name__ == "__main__":

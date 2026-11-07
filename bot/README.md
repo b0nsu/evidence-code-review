@@ -14,13 +14,16 @@ Add the `ai-review` label to a pull request, or comment `/review` on it. Only a 
 
 The bot removes the label after a run, so adding it again reviews the PR again. Pick the label when PRs merge into a branch other than the default branch.
 
-The bot posts one review with event `COMMENT`. It never approves or requests changes.
+The bot comments with event `COMMENT`. It never approves or requests changes. With the workflow defaults (`ECR_SUMMARY: comment`, inline P0-P3 at high or medium confidence):
 
-- A P0-P2 finding with `confidence=high` becomes an inline comment when its lines are inside a diff hunk.
-- Every other finding goes into the review body with the reason: below the inline threshold, outside the diff, or rejected by GitHub.
-- Assurance gaps, contract unknowns, the three-lens assessment and the scope are in the review body.
-- A finding already posted inline by an earlier run is listed once in the body and not commented again. The match uses the path, kind and title, so a reworded title counts as a new finding.
-- If Claude Code fails, or its JSON does not pass `scripts/validate_review.py`, the bot posts a short comment with the reason and a link to the run.
+- Each finding whose lines are inside a diff hunk becomes an inline comment on those lines, in one review.
+- The summary goes into one separate PR comment: the conclusion, findings that could not go inline (outside the diff, below the threshold, or rejected by GitHub), assurance gaps, contract unknowns, the three-lens assessment and the scope. A rerun edits this comment instead of adding another.
+- A finding already posted inline by an earlier run is listed once in the summary and not commented again. The match uses the path, kind and title, so a reworded title counts as a new finding.
+- If Claude Code fails, or its JSON does not pass `scripts/validate_review.py`, the bot writes the reason and a link to the run into the summary comment.
+
+`ECR_SUMMARY: review` puts the summary in the review body instead, and `ECR_INLINE_SEVERITIES` / `ECR_INLINE_CONFIDENCES` narrow what goes inline.
+
+Line numbers: the model gets the diff with the real base and target line number on every line (`annotate_diff.py`) and is told to cite only those. A model that reads a raw diff tends to cite the diff file's own line numbers. Before posting, `post_review.py` reads each cited file at the PR head and keeps a finding out of the inline review when its lines run past the end of the file.
 
 ## Setup
 
@@ -52,7 +55,8 @@ The model can still be misled by text in the PR. The validator checks structure,
 
 | File | Role |
 |---|---|
-| `post_review.py` | Extracts the JSON from Claude Code output, validates it, anchors findings, posts the review |
+| `post_review.py` | Extracts the JSON from Claude Code output, validates it, anchors findings, posts the inline review and the summary |
+| `annotate_diff.py` | Rewrites the PR diff with base and target line numbers on every line |
 | `review-prompt.md` | Prompt template; the workflow fills `$PR_NUMBER`, `$BASE_SHA`, `$HEAD_SHA`, `$CTX_DIR` |
 | `verify-prompt.md` | Verify-mode prompt for candidates in `$CTX_DIR/candidates.md`; not wired into the workflow yet |
 | `../tests/test_post_review.py` | Tests, using the JSON example in `references/finding-contract.md` as the fixture |
@@ -61,7 +65,8 @@ To check the posting step without GitHub, pass saved API responses and `--dry-ru
 
 ```bash
 python3 bot/post_review.py --repo OWNER/NAME --pr 1 --head-sha SHA \
-  --claude-output claude-output.json --files-json files.json --comments-json comments.json --dry-run
+  --claude-output claude-output.json --files-json files.json --comments-json comments.json \
+  --line-counts-json line-counts.json --summary comment --dry-run
 ```
 
 ## Not in v0

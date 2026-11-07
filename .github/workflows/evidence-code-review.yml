@@ -53,6 +53,13 @@ env:
   ECR_CLAUDE_CODE_VERSION: "2.1.318"
   ECR_MODEL: claude-opus-5-5
   ECR_MAX_BUDGET_USD: "5"
+  # Every finding GitHub can anchor goes inline; the summary, assurance gaps,
+  # contract unknowns and findings outside the diff go into one PR comment
+  # that reruns edit in place. ECR_SUMMARY=review puts the summary in the
+  # review body instead.
+  ECR_SUMMARY: comment
+  ECR_INLINE_SEVERITIES: P0,P1,P2,P3
+  ECR_INLINE_CONFIDENCES: high,medium
 
 jobs:
   review:
@@ -113,7 +120,7 @@ jobs:
           ctx="$RUNNER_TEMP/ctx"
           plugin="$RUNNER_TEMP/plugin"
           mkdir -p "$ctx" "$plugin/.claude-plugin" "$plugin/skills/evidence-code-review"
-          git -C pr diff --no-color "$BASE_SHA...$HEAD_SHA" > "$ctx/pr.diff"
+          git -C pr diff --no-color "$BASE_SHA...$HEAD_SHA" | python3 trusted/bot/annotate_diff.py > "$ctx/pr.diff"
           git -C pr log --no-color --format='commit %H%n%n%B' "$BASE_SHA..$HEAD_SHA" > "$ctx/commits.txt"
           jq '{number, title, body, base: .base.ref, head: .head.ref}' "$RUNNER_TEMP/pr.json" > "$ctx/pr.json"
           rm -rf pr/.claude pr/.mcp.json
@@ -213,6 +220,9 @@ jobs:
             --pr "$PR" \
             --head-sha "$HEAD_SHA" \
             --claude-output "$RUNNER_TEMP/out/claude-output.json" \
+            --summary "$ECR_SUMMARY" \
+            --inline-severities "$ECR_INLINE_SEVERITIES" \
+            --inline-confidences "$ECR_INLINE_CONFIDENCES" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
 
       - name: Remove trigger label
