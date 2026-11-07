@@ -123,7 +123,7 @@ The tests load the JSON examples in `finding-contract.md` as fixtures. When you 
 
 ### Evals
 
-The eval workspace lives outside this repository at `~/.claude/skills/evidence-code-review-workspace/`. It holds two real commit reviews, one verify-mode case and one snapshot fixture, all graded blind. Each iteration records its results and conclusions in `iteration-N/notes.md`.
+The eval workspace lives outside this repository at `~/.claude/skills/evidence-code-review-workspace/`. It holds two real commit reviews, one verify-mode case, one snapshot fixture and one hold-out verify case, all graded blind. Each iteration records its results and conclusions in `iteration-N/notes.md`. The cases are commits from a private codebase, so the cases and notes are not published. This README reports aggregate results only.
 
 An eval subagent loads the installed skill through the Skill tool, so one run can only measure one version. Install each version from its `skill-snapshot-<version>` directory in turn.
 
@@ -150,6 +150,12 @@ Iteration 10 measured 0.4.0. In verify mode, unchecked candidates promoted to `p
 In iterations 10 to 12, 0.4.x looked worse on the admin case. Iteration 13 reran 0.3.5 on the same day and saw the same shifts: more false claims, an inflated severity, and SDK source fetched from the network. The cause was a change in the run environment.
 
 After 0.4.1 added the boundary sentence, its 9 runs made 0 web calls. The same-day 0.3.5 runs made web calls in 1 of 3.
+
+Iteration 14 tested a proposed 0.4.2 (B1): rewording the `plausible` verdict so author-stated intent routes to "state what the design gives up". Three runs per version on one verify case, blind-graded, showed no benefit (author-intent grader 0.4.1 6/8, 0.4.2 3/8, within n=3 noise); 0.4.1 already routed those candidates to `plausible`, so B1's premise did not hold here. B1 was held; the skill stays at 0.4.1.
+
+Iteration 15 ran the same comparison on a hold-out commit that was not used to design the skill, taken from another area of the same codebase. Both versions verified the same candidate list, three runs each, blind-graded. The content graders passed in all six runs. On the author-intent grader 0.4.1 scored 10/12 and 0.4.2 scored 11/12, a one-instance gap within n=3 noise that stricter grading could reverse. Across iterations 14 and 15, B1 shows no consistent direction, so it stays held.
+
+The hold-out also checked whether the skill overfits the cases it was tuned on. No run confirmed a false finding. Candidates that depended on code outside the reviewed repository stayed `unverified`. The strongest runs noticed that a contract file updated in the same commit was the author's own claim, not an independent contract.
 
 ## License
 
